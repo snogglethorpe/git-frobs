@@ -1,0 +1,91 @@
+#!/bin/sh
+#
+# Usage: git-mapply PATCH_FILE
+#
+# Kind of like git-apply, except uses git-merge if the patch won't
+# apply directly, which has more sophisticated handling of renames,
+# etc.
+#
+# Unlike git-apply, changes end up in the index.
+#
+# Written by Miles Bader <miles@gnu.org>
+#
+
+me=$(basename $0)
+
+if test $# -ne 1; then
+  echo 1>&2 "Usage: $me PATCH_FILE"
+  exit 1
+fi
+
+patch="$1"
+if test ! -r "$patch"; then
+  echo 1>&2 "$patch: Cannot read patch file"
+  exit 2
+fi
+
+if git apply 2>/dev/null --check "$patch"; then
+  echo "* applying with 'git apply'"
+  git apply --index "$patch"
+  exit $?
+fi
+
+target_branch=$(git symbolic-ref --short HEAD 2>/dev/null)
+if test $? -ne 0; then
+  echo "$me: Not on a branch"
+  exit 3
+fi
+
+base_commit=$(
+  /usr/bin/nawk '
+  BEGIN {
+    # read patch "before" blob IDs
+    patch = "'"$patch"'"
+    num_patch_blobs = 0
+    while ((getline <patch) > 0)
+      if ($1 == "index" && $2 != "0000000") {
+	split ($2, range_ends, "[.][.]")
+	("git rev-parse " range_ends[1])| getline blob   # expand short rev id
+	patch_blobs[blob] = true
+	num_patch_blobs++
+      }
+    close (patch)
+
+    sq = "'"'"'"  # single quote
+    log_cmd = "git log --pretty=format:" sq "%T %h" sq
+    while ((log_cmd| getline) > 0) {
+      tree = $1
+      commit = $2
+      
+      num_patch_blobs_in_tree = 0
+
+      tree_cmd = "git ls-tree -r " sq tree sq
+      while ((tree_cmd| getline) > 0)
+	if ($3 in patch_blobs)
+	  if (++num_patch_blobs_in_tree == num_patch_blobs) {
+	    print commit
+	    exit (0)
+	  }
+      close (tree_cmd)
+    }
+
+    print patch ": Cannot locate patch prerequisite in commit history" |"cat 1>&2"
+    exit (5)
+  }'
+)
+test $? -eq 0 || exit $?
+
+echo "* applying to commit $(git show --oneline --no-patch "$base_commit")"
+
+cleanup_cmd="git checkout "$from_branch""
+for sig in 1 2 3 13 15; do
+  trap "$cleanup_cmd; trap $sig; kill -$sig \$\$" $sig;
+done
+trap "$cleanup_cmd" 0
+
+git checkout --quiet "$base_commit" &&
+git apply --index "$patch" &&
+git commit -m"Apply patch $(basename "$patch")" &&
+patched_commit=$(git rev-parse --short HEAD) &&
+git checkout --quiet "$target_branch" &&
+git merge --no-commit "$patched_commit"

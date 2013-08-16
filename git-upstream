@@ -1,0 +1,20 @@
+#!/bin/sh
+#
+# Usage: git-upstream
+#
+# Print upstream branch of current branch.
+#
+# Written by Miles Bader <miles@gnu.org>
+#
+
+test $# = 0 || { echo "Usage: git upstream"; exit 1; }
+ 
+branch=`git rev-parse --abbrev-ref HEAD`
+test $? -eq 0 || exit $?
+
+if test x"$branch" = xHEAD; then
+  echo 1>&2 "git set-upstream: Not on any branch"
+  exit 2
+fi
+
+git rev-parse --abbrev-ref "@{upstream}"
